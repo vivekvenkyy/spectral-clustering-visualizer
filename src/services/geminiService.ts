@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenAI } from "@google/genai";
 import { ClusterResult } from '../types';
 
 const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
@@ -9,7 +9,7 @@ export const analyzeClusteringResults = async (results: ClusterResult[], dataset
     return "Error: VITE_GEMINI_API_KEY environment variable not set. Please configure it to use Gemini analysis.";
   }
   
-  const genAI = new GoogleGenerativeAI(API_KEY);
+  const genAI = new GoogleGenAI({ apiKey: API_KEY });
   const datasetDescriptions: Record<string, string> = {
     'Moons': 'Two interlocking, non-convex crescent shapes. A classic test for algorithms that can handle non-linear structures.',
     'Circles': 'Two concentric circles. A key test for algorithms that are not based on linear separability, where Spectral Clustering should excel.',
@@ -53,17 +53,44 @@ export const analyzeClusteringResults = async (results: ClusterResult[], dataset
     // Use a model that your API key supports. The "models/*" names are returned by
     // the REST ListModels endpoint. Based on the key in your .env, use a supported
     // model id below.
-    const model = genAI.getGenerativeModel({
-      model: "models/gemini-2.5-flash",
-      generationConfig: {
-        temperature: 0.7,
-        topP: 0.8,
-        topK: 40,
-      },
-    });
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    return response.text();
+    // The client package's API surface varies by version. Use a flexible approach
+    // that tries the high-level client method first and falls back to common shapes.
+    const clientAny: any = genAI;
+
+    // Try models.generateContent() (newer clients)
+    let rawResult: any = null;
+    if (clientAny.models && typeof clientAny.models.generateContent === 'function') {
+      rawResult = await clientAny.models.generateContent({ model: "models/gemini-2.5-flash", contents: prompt });
+    } else if (typeof clientAny.getGenerativeModel === 'function') {
+      // older style: get a model handle then call generateContent
+      const modelHandle = clientAny.getGenerativeModel({ model: "models/gemini-2.5-flash" });
+      rawResult = await modelHandle.generateContent(prompt);
+    } else {
+      throw new Error('Unsupported Google GenAI client usage: cannot find generation method on client');
+    }
+
+    // Normalize possible response shapes to a string
+    //  - some clients return an object with `.response.text()` async method
+    //  - others return `{ outputText }` or `{ outputs: [{ content: { text } }] }`
+    if (rawResult == null) return 'No response from model';
+    try {
+      if (typeof rawResult.text === 'function') {
+        return await rawResult.text();
+      }
+      if (rawResult.response && typeof rawResult.response.text === 'function') {
+        return await rawResult.response.text();
+      }
+      if (typeof rawResult.outputText === 'string') return rawResult.outputText;
+      if (Array.isArray(rawResult.outputs) && rawResult.outputs[0]) {
+        const out = rawResult.outputs[0];
+        if (typeof out === 'string') return out;
+        if (out.content && out.content.text) return out.content.text;
+      }
+      // Fallback: return JSON
+      return JSON.stringify(rawResult);
+    } catch (e) {
+      return `Error parsing model response: ${(e as Error).message}`;
+    }
   } catch (error) {
     console.error("Error calling Gemini API:", error);
     if (error instanceof Error) {

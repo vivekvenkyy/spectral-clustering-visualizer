@@ -1,6 +1,6 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenAI } from "@google/genai";
 
-const API_KEY = process.env.VITE_GEMINI_API_KEY;
+const API_KEY = process.env.VITE_GEMINI_API_KEY || (typeof import.meta !== 'undefined' ? (import.meta as any).env?.VITE_GEMINI_API_KEY : undefined);
 
 async function listModels() {
     if (!API_KEY) {
@@ -8,17 +8,8 @@ async function listModels() {
         return;
     }
 
-    const genAI = new GoogleGenerativeAI(API_KEY);
-    console.log("Available models:");
-    const models = ["gemini-pro", "gemini-pro-vision"];
-    for (const modelName of models) {
-        try {
-            const model = genAI.getGenerativeModel({ model: modelName });
-            console.log(`- ${modelName}: Available`);
-        } catch (error) {
-            console.log(`- ${modelName}: Not available`);
-        }
-    }
+    const genAI = new GoogleGenAI({ apiKey: API_KEY as string });
+    console.log("Created GoogleGenAI client (test).\nNote: this script is intended for Node, and may not run in the browser.");
 }
 
 listModels();
