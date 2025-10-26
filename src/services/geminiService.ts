@@ -69,25 +69,48 @@ export const analyzeClusteringResults = async (results: ClusterResult[], dataset
       throw new Error('Unsupported Google GenAI client usage: cannot find generation method on client');
     }
 
-    // Normalize possible response shapes to a string
-    //  - some clients return an object with `.response.text()` async method
-    //  - others return `{ outputText }` or `{ outputs: [{ content: { text } }] }`
+    // Normalize possible response shapes to a string. The newer Gemini responses
+    // often contain `candidates` -> `content` -> `parts` -> `text` (or `outputs`).
     if (rawResult == null) return 'No response from model';
     try {
+      // If the SDK returned a helper with .text() method
       if (typeof rawResult.text === 'function') {
         return await rawResult.text();
       }
       if (rawResult.response && typeof rawResult.response.text === 'function') {
         return await rawResult.response.text();
       }
-      if (typeof rawResult.outputText === 'string') return rawResult.outputText;
-      if (Array.isArray(rawResult.outputs) && rawResult.outputs[0]) {
-        const out = rawResult.outputs[0];
-        if (typeof out === 'string') return out;
-        if (out.content && out.content.text) return out.content.text;
+
+      // Newer REST-like shapes: { candidates: [ { content: { parts: [ { text } ] } } ] }
+      if (Array.isArray(rawResult.candidates) && rawResult.candidates.length > 0) {
+        const candidate = rawResult.candidates[0];
+        // content.parts is common
+        if (candidate.content && Array.isArray(candidate.content.parts)) {
+          const parts = candidate.content.parts.map((p: any) => p.text || p).filter(Boolean);
+          if (parts.length) return parts.join('\n\n');
+        }
+        // fallback to any text field on candidate
+        if (typeof candidate === 'string') return candidate;
+        if (typeof candidate.content === 'string') return candidate.content;
       }
-      // Fallback: return JSON
-      return JSON.stringify(rawResult);
+
+      // Alternate shape: outputs: [{ content: [{ text: '...' }] }]
+      if (Array.isArray(rawResult.outputs) && rawResult.outputs.length > 0) {
+        const out = rawResult.outputs[0];
+        if (out.content && Array.isArray(out.content)) {
+          const part = out.content[0];
+          if (part && part.text) return part.text;
+        }
+        if (typeof out === 'string') return out;
+      }
+
+      // Simple properties
+      if (typeof rawResult.outputText === 'string') return rawResult.outputText;
+
+      // As a last resort, pretty-print the JSON but strip large sdkHttpResponse details
+      const copy = { ...rawResult } as any;
+      if (copy.sdkHttpResponse) delete copy.sdkHttpResponse;
+      return JSON.stringify(copy, null, 2);
     } catch (e) {
       return `Error parsing model response: ${(e as Error).message}`;
     }
